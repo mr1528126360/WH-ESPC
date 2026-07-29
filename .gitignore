@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Data and weights (not distributed with the code)
+data/
+checkpoints/
+*.bin
+*.pth
+*.ckpt
+
+# Training outputs
+outputs/
+*.npy
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
