@@ -173,3 +173,72 @@ faithful to the original experiments, with the following deliberate clean-ups:
 ## Citation
 
 If you find this code useful, please cite our paper (citation to be added).
+# WH-ESPCA: multi-encoder version
+
+**WH-ESPCA** extends WH-ESPC from a single CaFormer encoder to three
+heterogeneous frozen encoders with learnable gated late fusion:
+
+1. **Multi-encoder feature extraction.** Three frozen ImageNet-pretrained
+   backbones — CaFormer-B36 (768-d), ResNet-152 (2048-d) and Swin-B (1024-d) —
+   extract per-slice embeddings in parallel. Each stream is projected into a
+   shared 512-d latent space by its own trainable FC head.
+
+2. **Per-stream MoE-Transformer.** Each stream is processed by an independent
+   MoE-Transformer identical to WH-ESPC Module 2 (noisy top-k routing,
+   dynamic bias adjustment with historical-memory load tracing and softsign
+   regularisation, 16 experts, top-4, 1 shared expert, 2 layers, 4 heads).
+
+3. **LSTM decoder + gated fusion.** Each stream is decoded by its own LSTM
+   decoder (1 layer, 64 hidden units, FC dim 32) into class probabilities
+   `p_m` and a 32-d stream hidden state `h_m`. A **sample-adaptive learnable
+   gate** — a generalisation of USweA's fixed per-class accuracy weighting —
+   computes per-sample stream weights
+   `g = softmax(W [h_1; h_2; h_3])` and outputs the convex combination
+   `p = Σ_m g_m · p_m`.
+
+```
+scan (slice sequence)
+   ├── CaFormer-B36 ── FC head ── MoE-Transformer ── LSTM ── p1, h1 ──┐
+   ├── ResNet-152  ── FC head ── MoE-Transformer ── LSTM ── p2, h2 ──┼─ gated fusion ── prediction
+   └── Swin-B      ── FC head ── MoE-Transformer ── LSTM ── p3, h3 ──┘
+```
+
+## Files added by this update
+
+```
+wh_espc/
+├── encoders.py          # FrozenBackboneEncoder registry + FCProjectionHead + feature extraction
+├── moe_transformer.py   # MultiHeadAttention, SparseMoE, DynamicBiasAdjuster, MoETransformer
+├── decoder_whespca.py   # LSTMDecoder (with hidden output) + GatedFusion
+└── model_whespca.py     # WHESPCA full model
+train_whespca.py         # training / evaluation entry point
+```
+
+## Training
+
+```bash
+python train_whespca.py \
+    --csv data/labels.csv \
+    --data-dir data/scans \
+    --num-classes 4 \
+    --runs 10 --output-dir outputs_whespca
+```
+
+Pretrained backbone weights are read from `checkpoints/` (see
+`wh_espc/encoders.py::ENCODER_REGISTRY`); missing files fall back to
+automatic download from the Hugging Face Hub.
+
+Default hyperparameters (matching the reported experiments):
+
+| Setting | Value |
+| --- | --- |
+| encoders | CaFormer-B36 + ResNet-152 + Swin-B (all frozen) |
+| slices per scan | 8 (evenly spaced, last-slice padding) |
+| latent dim / MoE | 512 / 16 experts, top-4, 1 shared expert |
+| fusion | learnable sample-adaptive gate over stream hidden states |
+| optimizer | Adam, lr = 1e-5 |
+| dropout / epochs / batch size | 0.5 / 60 / 64 |
+
+Outputs per run: `classification_report.txt`, `roc.png`, `pr.png`, `dca.png`,
+`predictions.csv`, `metrics.json`; aggregated `summary_mean_sd.csv` (mean ± SD
+over runs, including ECE) and `mean_roc/pr/dca.png`.
